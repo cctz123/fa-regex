@@ -13,6 +13,7 @@ import AutomatonCanvas from '@/components/Canvas/AutomatonCanvas'
 import InspectorPanel from '@/components/Inspector/InspectorPanel'
 import SimulatorPanel from '@/components/Simulator/SimulatorPanel'
 import TopBar from '@/components/TopBar'
+import Toast from '@/components/Toast'
 
 import type {
   StateNode,
@@ -45,6 +46,7 @@ export default function Home() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null)
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [simState, setSimState] = useState<SimulationState | null>(null)
+  const [toastMessage, setToastMessage] = useState<string | null>(null)
 
   // ── Undo history ──────────────────────────────────────────────────────────
   const historyRef = useRef<Snapshot[]>([])
@@ -143,6 +145,16 @@ export default function Home() {
   // ── Structural mutations (each saves history first) ────────────────────────
   const onConnect = useCallback(
     (connection: Connection) => {
+      // Reject duplicate connections (same source → same target)
+      const duplicate = edges.some(
+        (e) => e.source === connection.source && e.target === connection.target
+      )
+      if (duplicate) {
+        const srcLabel = nodes.find((n) => n.id === connection.source)?.data.label ?? connection.source
+        const tgtLabel = nodes.find((n) => n.id === connection.target)?.data.label ?? connection.target
+        setToastMessage(`A transition from ${srcLabel} to ${tgtLabel} already exists.`)
+        return
+      }
       pushHistory()
       const id = `e-${connection.source}-${connection.target}-${Date.now()}`
       const newEdge: TransitionEdge = {
@@ -159,7 +171,7 @@ export default function Home() {
       setSelectedNodeId(null)
       setSimState(null)
     },
-    [pushHistory]
+    [pushHistory, edges, nodes]
   )
 
   const addState = useCallback(() => {
@@ -327,16 +339,24 @@ export default function Home() {
               Drag from a state's border to connect transitions. Click to select.
             </span>
           </div>
-          <AutomatonCanvas
-            nodes={nodes}
-            edges={edges}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onNodeClick={onNodeClick}
-            onEdgeClick={onEdgeClick}
-            onPaneClick={onPaneClick}
-          />
+          <div className="relative flex-1 min-h-0">
+            <AutomatonCanvas
+              nodes={nodes}
+              edges={edges}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
+              onPaneClick={onPaneClick}
+            />
+            {toastMessage && (
+              <Toast
+                message={toastMessage}
+                onDone={() => setToastMessage(null)}
+              />
+            )}
+          </div>
         </div>
 
         {/* Right panel */}
