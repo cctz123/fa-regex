@@ -46,15 +46,13 @@ function StateNodeComponent({ data, selected }: NodeProps<StateNode>) {
         </span>
       </div>
 
-      {/* Handles — invisible, placed at cardinal positions */}
+      {/* Source-only handles — connectionMode="loose" on the canvas lets these
+          also accept incoming connections, eliminating handle-type ambiguity
+          that caused drag-direction to be reversed. */}
       <Handle type="source" position={Position.Top} id="top" className="opacity-0 w-2 h-2" />
       <Handle type="source" position={Position.Right} id="right" className="opacity-0 w-2 h-2" />
       <Handle type="source" position={Position.Bottom} id="bottom" className="opacity-0 w-2 h-2" />
       <Handle type="source" position={Position.Left} id="left" className="opacity-0 w-2 h-2" />
-      <Handle type="target" position={Position.Top} id="top-t" className="opacity-0 w-2 h-2" />
-      <Handle type="target" position={Position.Right} id="right-t" className="opacity-0 w-2 h-2" />
-      <Handle type="target" position={Position.Bottom} id="bottom-t" className="opacity-0 w-2 h-2" />
-      <Handle type="target" position={Position.Left} id="left-t" className="opacity-0 w-2 h-2" />
     </div>
   )
 }

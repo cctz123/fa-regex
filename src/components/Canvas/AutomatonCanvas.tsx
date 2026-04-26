@@ -6,6 +6,7 @@ import {
   Background,
   Controls,
   MiniMap,
+  ConnectionMode,
   type Connection,
   type EdgeChange,
   type NodeChange,
@@ -75,6 +76,7 @@ export default function AutomatonCanvas({
         onEdgeClick={(_: React.MouseEvent, edge: Edge) => onEdgeClick(edge.id)}
         onPaneClick={onPaneClick}
         defaultEdgeOptions={defaultEdgeOptions}
+        connectionMode={ConnectionMode.Loose}
         fitView
         fitViewOptions={{ padding: 0.3 }}
         minZoom={0.3}
