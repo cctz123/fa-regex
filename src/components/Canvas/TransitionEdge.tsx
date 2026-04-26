@@ -83,15 +83,25 @@ function TransitionEdgeComponent({
 
   // ── Self-loop ──────────────────────────────────────────────────────────────
   if (source === target) {
-    const cx = sourceX
-    const cy = sourceY
-    const loopRadius = 38
-    const d = `M ${cx - 12} ${cy - 28}
-      C ${cx - loopRadius - 10} ${cy - loopRadius - 40},
-        ${cx + loopRadius + 10} ${cy - loopRadius - 40},
-        ${cx + 12} ${cy - 28}`
+    // Anchor to the actual node center so the loop stays attached when nodes move
+    const sw = sourceNode?.measured?.width ?? 64
+    const sh = sourceNode?.measured?.height ?? 64
+    const cx = sourceNode
+      ? sourceNode.internals.positionAbsolute.x + sw / 2
+      : sourceX
+    const cy = sourceNode
+      ? sourceNode.internals.positionAbsolute.y + sh / 2
+      : sourceY
+
+    // Loop starts/ends at the top of the circle, arcs up above it
+    const topY = cy - NODE_RADIUS
+    const loopRadius = 34
+    const d = `M ${cx - 10} ${topY}
+      C ${cx - loopRadius - 8} ${topY - loopRadius - 20},
+        ${cx + loopRadius + 8} ${topY - loopRadius - 20},
+        ${cx + 10} ${topY}`
     const labelX = cx
-    const labelY = cy - loopRadius - 52
+    const labelY = topY - loopRadius - 28
 
     return (
       <>
