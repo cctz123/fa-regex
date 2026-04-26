@@ -19,10 +19,10 @@ import type {
   StateNode,
   TransitionEdge,
   SimulationState,
-  ExampleAutomaton,
 } from '@/types/automaton'
 import { deriveAutomaton } from '@/lib/simulation'
-import { EXAMPLES } from '@/data/examples'
+import type { DiagramId, DiagramMeta, DiagramDocument } from '@/types/diagrams'
+import { isExampleDiagramId } from '@/lib/diagramIds'
 
 let nodeCounter = 0
 function nextNodeId() {
@@ -48,9 +48,112 @@ export default function Home() {
   const [simState, setSimState] = useState<SimulationState | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
+  // ── Diagram persistence (filesystem via API routes) ────────────────────────
+  const [diagrams, setDiagrams] = useState<DiagramMeta[]>([])
+  const [diagramId, setDiagramId] = useState<DiagramId | null>(null)
+  const [diagramDescription, setDiagramDescription] = useState<string>('')
+  const hydratingRef = useRef(false)
+  const saveTimerRef = useRef<number | null>(null)
+
   // ── Undo history ──────────────────────────────────────────────────────────
   const historyRef = useRef<Snapshot[]>([])
   const [historyLength, setHistoryLength] = useState(0)
+
+  const resetEphemeralState = useCallback(() => {
+    historyRef.current = []
+    setHistoryLength(0)
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setSimState(null)
+  }, [])
+
+  const applyLoadedDiagram = useCallback(
+    (doc: DiagramDocument) => {
+      hydratingRef.current = true
+      try {
+        nodeCounter = doc.nodes.length
+        setNodes(doc.nodes.map((n) => ({ ...n, data: { ...n.data, isActive: false } })))
+        setEdges(
+          doc.edges.map((e) => ({
+            ...e,
+            data: { ...(e.data ?? { symbols: [], isActive: false }), isActive: false },
+          }))
+        )
+        setDiagramId(doc.id)
+        setDiagramDescription(doc.description ?? '')
+        resetEphemeralState()
+      } finally {
+        // allow effects to run after state commit
+        setTimeout(() => {
+          hydratingRef.current = false
+        }, 0)
+      }
+    },
+    [resetEphemeralState]
+  )
+
+  const refreshDiagramList = useCallback(async () => {
+    const res = await fetch('/api/diagrams', { cache: 'no-store' })
+    if (!res.ok) throw new Error('Failed to list diagrams')
+    const json = (await res.json()) as { diagrams: DiagramMeta[] }
+    setDiagrams(json.diagrams ?? [])
+    return json.diagrams ?? []
+  }, [])
+
+  const loadDiagram = useCallback(
+    async (id: DiagramId) => {
+      const res = await fetch(`/api/diagrams/${encodeURIComponent(id)}`, { cache: 'no-store' })
+      if (!res.ok) throw new Error('Failed to load diagram')
+      const doc = (await res.json()) as DiagramDocument
+      applyLoadedDiagram(doc)
+      localStorage.setItem('fa.lastDiagramId', doc.id)
+    },
+    [applyLoadedDiagram]
+  )
+
+  const createDiagram = useCallback(async (description?: string) => {
+    const res = await fetch('/api/diagrams', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ description }),
+    })
+    if (!res.ok) throw new Error('Failed to create diagram')
+    const doc = (await res.json()) as DiagramDocument
+    await refreshDiagramList()
+    applyLoadedDiagram(doc)
+    localStorage.setItem('fa.lastDiagramId', doc.id)
+  }, [applyLoadedDiagram, refreshDiagramList])
+
+  const deleteCurrentDiagram = useCallback(async () => {
+    if (!diagramId) return
+    if (isExampleDiagramId(diagramId)) {
+      setToastMessage('Example diagrams cannot be deleted.')
+      return
+    }
+    const ok = window.confirm('Delete this diagram? This cannot be undone.')
+    if (!ok) return
+    await fetch(`/api/diagrams/${encodeURIComponent(diagramId)}`, { method: 'DELETE' })
+    const nextList = await refreshDiagramList()
+    const next = nextList[0]?.id ?? null
+    if (next) await loadDiagram(next)
+    else await createDiagram('Untitled diagram')
+  }, [createDiagram, diagramId, loadDiagram, refreshDiagramList])
+
+  // Bootstrap: list diagrams, then load last-opened or create one.
+  useEffect(() => {
+    ;(async () => {
+      try {
+        const list = await refreshDiagramList()
+        const last = localStorage.getItem('fa.lastDiagramId')
+        const pick = (last && list.some((d) => d.id === last) ? last : list[0]?.id) ?? null
+        if (pick) await loadDiagram(pick)
+        else await createDiagram('Untitled diagram')
+      } catch (e) {
+        console.error(e)
+        setToastMessage('Failed to load diagrams from disk.')
+      }
+    })()
+  }, [])
 
   // Capture current nodes+edges onto the history stack before a mutation.
   // Uses functional setState to read the latest values without needing them
@@ -263,23 +366,87 @@ export default function Home() {
     [pushHistory]
   )
 
-  const onLoadExample = useCallback(
-    (example: ExampleAutomaton) => {
-      pushHistory()
-      nodeCounter = example.nodes.length
-      setNodes(example.nodes.map((n) => ({ ...n, data: { ...n.data, isActive: false } })))
-      setEdges(
-        example.edges.map((e) => ({
-          ...e,
-          data: { ...(e.data ?? { symbols: [], isActive: false }), isActive: false },
-        }))
-      )
-      setSelectedNodeId(null)
-      setSelectedEdgeId(null)
-      setSimState(null)
+  const onSelectDiagram = useCallback(
+    async (id: DiagramId) => {
+      try {
+        await loadDiagram(id)
+      } catch (e) {
+        console.error(e)
+        setToastMessage('Failed to load diagram.')
+      }
     },
-    [pushHistory]
+    [loadDiagram]
   )
+
+  const onCreateDiagram = useCallback(async () => {
+    try {
+      const initial = 'Untitled diagram'
+      const desc = window.prompt('New diagram description:', initial)
+      if (desc === null) return
+      const trimmed = desc.trim()
+      await createDiagram(trimmed || initial)
+    } catch (e) {
+      console.error(e)
+      setToastMessage('Failed to create diagram.')
+    }
+  }, [createDiagram])
+
+  const onRenameDiagram = useCallback(async () => {
+    if (!diagramId) return
+    if (isExampleDiagramId(diagramId)) {
+      setToastMessage('Example diagrams cannot be renamed.')
+      return
+    }
+    const initial = diagramDescription || 'Untitled diagram'
+    const next = window.prompt('Rename diagram:', initial)
+    if (next === null) return
+    const trimmed = next.trim()
+    const finalDesc = trimmed || initial
+
+    try {
+      // update immediately, not via debounce
+      setDiagramDescription(finalDesc)
+      await fetch(`/api/diagrams/${encodeURIComponent(diagramId)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description: finalDesc }),
+      })
+      await refreshDiagramList()
+    } catch (e) {
+      console.error(e)
+      setToastMessage('Failed to rename diagram.')
+    }
+  }, [diagramDescription, diagramId, refreshDiagramList])
+
+  const onDeleteDiagram = useCallback(async () => {
+    try {
+      await deleteCurrentDiagram()
+    } catch (e) {
+      console.error(e)
+      setToastMessage('Failed to delete diagram.')
+    }
+  }, [deleteCurrentDiagram])
+
+  const onResetExample = useCallback(async () => {
+    if (!diagramId) return
+    if (!isExampleDiagramId(diagramId)) return
+    const ok = window.confirm('Reset this example back to its original state?')
+    if (!ok) return
+
+    try {
+      const res = await fetch(`/api/diagrams/${encodeURIComponent(diagramId)}/reset`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error('reset failed')
+      const doc = (await res.json()) as DiagramDocument
+      applyLoadedDiagram(doc)
+      await refreshDiagramList()
+      setToastMessage('Example reset.')
+    } catch (e) {
+      console.error(e)
+      setToastMessage('Failed to reset example.')
+    }
+  }, [applyLoadedDiagram, diagramId, refreshDiagramList])
 
   const onNewAutomaton = useCallback(() => {
     pushHistory()
@@ -305,17 +472,48 @@ export default function Home() {
     setSelectedEdgeId(null)
   }, [])
 
-  // Load first example on mount (no history entry — nothing to undo to)
+  // Autosave current diagram (debounced)
   useEffect(() => {
-    onLoadExample(EXAMPLES[0])
-    historyRef.current = []
-    setHistoryLength(0)
-  }, [])
+    if (!diagramId) return
+    if (hydratingRef.current) return
+
+    if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = window.setTimeout(async () => {
+      try {
+        await fetch(`/api/diagrams/${encodeURIComponent(diagramId)}`, {
+          method: 'PUT',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            description: diagramDescription,
+            nodes,
+            edges,
+          }),
+        })
+        await refreshDiagramList()
+      } catch (e) {
+        console.error(e)
+        setToastMessage('Autosave failed.')
+      }
+    }, 800)
+
+    return () => {
+      if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
+    }
+  }, [diagramId, diagramDescription, edges, nodes, refreshDiagramList])
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-screen bg-slate-100">
-      <TopBar onLoadExample={onLoadExample} onNewAutomaton={onNewAutomaton} />
+      <TopBar
+        onNewAutomaton={onNewAutomaton}
+        diagrams={diagrams}
+        selectedDiagramId={diagramId}
+        onSelectDiagram={onSelectDiagram}
+        onCreateDiagram={onCreateDiagram}
+        onRenameDiagram={onRenameDiagram}
+        onResetExample={onResetExample}
+        onDeleteDiagram={onDeleteDiagram}
+      />
 
       <div className="flex flex-1 min-h-0">
         {/* Canvas */}
