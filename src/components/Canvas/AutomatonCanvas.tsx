@@ -48,7 +48,21 @@ export default function AutomatonCanvas({
   )
 
   return (
-    <div className="flex-1 h-full bg-slate-50">
+    <div className="flex-1 h-full bg-slate-50 relative">
+      {/* Global marker defs — defined once so all edges can reference them */}
+      <svg style={{ position: 'absolute', width: 0, height: 0, overflow: 'hidden' }}>
+        <defs>
+          <marker id="fa-arrow-default" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#64748b" />
+          </marker>
+          <marker id="fa-arrow-active" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#3b82f6" />
+          </marker>
+          <marker id="fa-arrow-selected" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#6366f1" />
+          </marker>
+        </defs>
+      </svg>
       <ReactFlow
         nodes={nodes}
         edges={edges}
