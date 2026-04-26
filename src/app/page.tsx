@@ -611,7 +611,9 @@ export default function Home() {
           </div>
 
           <RegexParsePanel input={regexInput} english={regexEnglish} tree={regexTree} error={regexError} />
-          {explanation && <ExplainPanel title={explanation.title} text={explanation.text} />}
+          {explanation && (
+            <ExplainPanel title={explanation.title} text={explanation.text} details={explanation.details} />
+          )}
 
           {!selectedNode && !selectedEdge && (
             <div className="px-4 pb-3 text-xs text-slate-400">

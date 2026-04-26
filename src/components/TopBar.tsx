@@ -15,8 +15,8 @@ interface TopBarProps {
   onResetExample: () => void
   onDeleteDiagram: () => void
   onRegex: () => void
-  explainMode: 'off' | 'optionA' | 'optionB'
-  onExplainModeChange: (mode: 'off' | 'optionA' | 'optionB') => void
+  explainMode: 'off' | 'optionA' | 'optionB' | 'optionC'
+  onExplainModeChange: (mode: 'off' | 'optionA' | 'optionB' | 'optionC') => void
 }
 
 export default function TopBar({
@@ -164,6 +164,7 @@ export default function TopBar({
           <option value="off">Off</option>
           <option value="optionA">Option A</option>
           <option value="optionB">Option B</option>
+          <option value="optionC">Option C</option>
         </select>
       </div>
 

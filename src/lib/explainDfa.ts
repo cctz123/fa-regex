@@ -1,6 +1,8 @@
 import type { Automaton } from '@/types/automaton'
+import type { RegexAst } from '@/types/regex'
+import { describeRegexEnglish, formatRegexAstTree } from '@/lib/regex'
 
-export type ExplainMode = 'off' | 'optionA' | 'optionB'
+export type ExplainMode = 'off' | 'optionA' | 'optionB' | 'optionC'
 
 function uniq<T>(xs: T[]): T[] {
   return [...new Set(xs)]
@@ -159,11 +161,173 @@ export function explainOptionA(a: Automaton): string {
   return `${detPart} It starts at ${start} and is ${alphabetPart}. ${acceptingPart}`
 }
 
-export function explainDfa(a: Automaton, mode: ExplainMode): { title: string; text: string } | null {
+function eps(): RegexAst {
+  return { type: 'epsilon' }
+}
+function lit(v: string): RegexAst {
+  return { type: 'literal', value: v }
+}
+function isEpsilonAst(x: RegexAst): boolean {
+  return x.type === 'epsilon'
+}
+function unionAst(a: RegexAst, b: RegexAst): RegexAst {
+  if (a.type === 'union') return { type: 'union', options: [...a.options, b] }
+  if (b.type === 'union') return { type: 'union', options: [a, ...b.options] }
+  return { type: 'union', options: [a, b] }
+}
+function concatAst(a: RegexAst, b: RegexAst): RegexAst {
+  if (isEpsilonAst(a)) return b
+  if (isEpsilonAst(b)) return a
+  if (a.type === 'concat') return { type: 'concat', parts: [...a.parts, b] }
+  if (b.type === 'concat') return { type: 'concat', parts: [a, ...b.parts] }
+  return { type: 'concat', parts: [a, b] }
+}
+function starAst(a: RegexAst): RegexAst {
+  // (ε)* = ε
+  if (isEpsilonAst(a)) return eps()
+  if (a.type === 'star') return a
+  return { type: 'star', expr: a }
+}
+
+function regexAstToString(ast: RegexAst): string {
+  const prec = (n: RegexAst): number => {
+    switch (n.type) {
+      case 'union':
+        return 1
+      case 'concat':
+        return 2
+      case 'star':
+        return 3
+      default:
+        return 4
+    }
+  }
+  const show = (n: RegexAst, parentPrec: number): string => {
+    let s: string
+    switch (n.type) {
+      case 'epsilon':
+        s = 'ε'
+        break
+      case 'literal':
+        s = n.value
+        break
+      case 'star': {
+        const inner = show(n.expr, prec(n))
+        s = `${inner}*`
+        break
+      }
+      case 'concat': {
+        s = n.parts.map((p) => show(p, prec(n))).join('')
+        break
+      }
+      case 'union': {
+        s = n.options.map((o) => show(o, prec(n))).join('|')
+        break
+      }
+    }
+    return prec(n) < parentPrec ? `(${s})` : s
+  }
+  return show(ast, 0)
+}
+
+// Option C: Convert DFA to regex via state elimination (GNFA-style).
+function dfaToRegexAst(a: Automaton): RegexAst | null {
+  if (!a.startStateId) return null
+
+  const states = a.states.map((s) => s.id)
+  const start = '__start'
+  const accept = '__accept'
+  const all = [start, ...states, accept]
+
+  const R = new Map<string, RegexAst>()
+  const key = (i: string, j: string) => `${i}→${j}`
+  const get = (i: string, j: string): RegexAst | null => R.get(key(i, j)) ?? null
+  const set = (i: string, j: string, r: RegexAst) => R.set(key(i, j), r)
+
+  // Initialize all to null (no transition)
+  for (const i of all) for (const j of all) R.delete(key(i, j))
+
+  // Copy transitions (union if multiple)
+  for (const t of a.transitions) {
+    for (const sym of t.symbols) {
+      const r = sym === 'ε' ? eps() : lit(sym)
+      const prev = get(t.from, t.to)
+      set(t.from, t.to, prev ? unionAst(prev, r) : r)
+    }
+  }
+
+  // New start ε→ original start
+  set(start, a.startStateId, eps())
+
+  // Accepting states ε→ new accept
+  for (const s of a.states) {
+    if (s.isAccepting) {
+      const prev = get(s.id, accept)
+      set(s.id, accept, prev ? unionAst(prev, eps()) : eps())
+    }
+  }
+
+  // Eliminate each original state (not start/accept)
+  const eliminable = [...states]
+  for (const k of eliminable) {
+    const Rkk = get(k, k)
+    const RkkStar = Rkk ? starAst(Rkk) : eps()
+
+    for (const i of all) {
+      if (i === k) continue
+      const Rik = get(i, k)
+      if (!Rik) continue
+
+      for (const j of all) {
+        if (j === k) continue
+        const Rkj = get(k, j)
+        if (!Rkj) continue
+
+        const through = concatAst(concatAst(Rik, RkkStar), Rkj)
+        const prev = get(i, j)
+        set(i, j, prev ? unionAst(prev, through) : through)
+      }
+    }
+
+    // Remove edges touching k (optional cleanup)
+    for (const i of all) {
+      R.delete(key(i, k))
+      R.delete(key(k, i))
+    }
+  }
+
+  return get(start, accept)
+}
+
+export function explainDfa(
+  a: Automaton,
+  mode: ExplainMode
+): { title: string; text: string; details?: { label: string; value: string; monospace?: boolean }[] } | null {
   if (mode === 'off') return null
   if (mode === 'optionA') return { title: 'Explain (Option A)', text: explainOptionA(a) }
-  const b = explainOptionB(a)
-  if (b) return { title: 'Explain (Option B)', text: b }
-  return { title: 'Explain (Option B)', text: `${explainOptionA(a)} (No specific pattern recognized.)` }
+
+  if (mode === 'optionB') {
+    const b = explainOptionB(a)
+    if (b) return { title: 'Explain (Option B)', text: b }
+    return { title: 'Explain (Option B)', text: `${explainOptionA(a)} (No specific pattern recognized.)` }
+  }
+
+  // Option C
+  const ast = dfaToRegexAst(a)
+  if (!ast) {
+    return { title: 'Explain (Option C)', text: 'Cannot derive a regex (missing start or accepting state).' }
+  }
+  const regex = regexAstToString(ast)
+  const english = describeRegexEnglish(ast)
+  const tree = formatRegexAstTree(ast)
+
+  return {
+    title: 'Explain (Option C)',
+    text: english,
+    details: [
+      { label: 'Equivalent regex', value: regex, monospace: true },
+      { label: 'Regex AST', value: tree, monospace: true },
+    ],
+  }
 }
 
