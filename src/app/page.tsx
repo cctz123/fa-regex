@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react'
 import {
   applyNodeChanges,
   applyEdgeChanges,
@@ -37,6 +37,8 @@ function makeNode(id: string, position: { x: number; y: number }, isFirst: boole
   }
 }
 
+type Snapshot = { nodes: StateNode[]; edges: TransitionEdge[] }
+
 export default function Home() {
   const [nodes, setNodes] = useState<StateNode[]>([])
   const [edges, setEdges] = useState<TransitionEdge[]>([])
@@ -44,6 +46,52 @@ export default function Home() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [simState, setSimState] = useState<SimulationState | null>(null)
 
+  // ── Undo history ──────────────────────────────────────────────────────────
+  const historyRef = useRef<Snapshot[]>([])
+  const [historyLength, setHistoryLength] = useState(0)
+
+  // Capture current nodes+edges onto the history stack before a mutation.
+  // Uses functional setState to read the latest values without needing them
+  // in the dependency array (avoids stale-closure bugs).
+  const pushHistory = useCallback(() => {
+    setNodes((currentNodes) => {
+      setEdges((currentEdges) => {
+        historyRef.current = [
+          ...historyRef.current.slice(-49),
+          { nodes: currentNodes, edges: currentEdges },
+        ]
+        setHistoryLength(historyRef.current.length)
+        return currentEdges
+      })
+      return currentNodes
+    })
+  }, [])
+
+  const undo = useCallback(() => {
+    if (historyRef.current.length === 0) return
+    const prev = historyRef.current[historyRef.current.length - 1]
+    historyRef.current = historyRef.current.slice(0, -1)
+    setHistoryLength(historyRef.current.length)
+    setNodes(prev.nodes)
+    setEdges(prev.edges)
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
+    setSimState(null)
+  }, [])
+
+  // Ctrl-Z / Cmd-Z keyboard shortcut
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        e.preventDefault()
+        undo()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [undo])
+
+  // ── Derived state ──────────────────────────────────────────────────────────
   const automaton = useMemo(() => deriveAutomaton(nodes, edges), [nodes, edges])
 
   const selectedNode = useMemo(
@@ -66,24 +114,36 @@ export default function Home() {
     setEdges((eds) =>
       eds.map((e) => ({
         ...e,
-        data: { ...(e.data ?? { symbols: [], isActive: false }), isActive: simState?.activeTransitionIds.has(e.id) ?? false },
+        data: {
+          ...(e.data ?? { symbols: [], isActive: false }),
+          isActive: simState?.activeTransitionIds.has(e.id) ?? false,
+        },
       }))
     )
   }, [simState])
 
+  // ── React Flow change handlers ─────────────────────────────────────────────
   const onNodesChange = useCallback(
-    (changes: NodeChange<StateNode>[]) =>
-      setNodes((nds) => applyNodeChanges(changes, nds) as StateNode[]),
-    []
-  )
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange<TransitionEdge>[]) =>
-      setEdges((eds) => applyEdgeChanges(changes, eds) as TransitionEdge[]),
-    []
+    (changes: NodeChange<StateNode>[]) => {
+      // Push history before RF-native deletions (Delete key on canvas)
+      if (changes.some((c) => c.type === 'remove')) pushHistory()
+      setNodes((nds) => applyNodeChanges(changes, nds) as StateNode[])
+    },
+    [pushHistory]
   )
 
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<TransitionEdge>[]) => {
+      if (changes.some((c) => c.type === 'remove')) pushHistory()
+      setEdges((eds) => applyEdgeChanges(changes, eds) as TransitionEdge[])
+    },
+    [pushHistory]
+  )
+
+  // ── Structural mutations (each saves history first) ────────────────────────
   const onConnect = useCallback(
     (connection: Connection) => {
+      pushHistory()
       const id = `e-${connection.source}-${connection.target}-${Date.now()}`
       const newEdge: TransitionEdge = {
         id,
@@ -99,10 +159,11 @@ export default function Home() {
       setSelectedNodeId(null)
       setSimState(null)
     },
-    []
+    [pushHistory]
   )
 
   const addState = useCallback(() => {
+    pushHistory()
     const id = nextNodeId()
     const isFirst = nodes.length === 0
     const pos = {
@@ -114,31 +175,15 @@ export default function Home() {
     setSelectedNodeId(id)
     setSelectedEdgeId(null)
     setSimState(null)
-  }, [nodes.length])
-
-  const onNodeClick = useCallback((id: string) => {
-    setSelectedNodeId(id)
-    setSelectedEdgeId(null)
-  }, [])
-
-  const onEdgeClick = useCallback((id: string) => {
-    setSelectedEdgeId(id)
-    setSelectedNodeId(null)
-  }, [])
-
-  const onPaneClick = useCallback(() => {
-    setSelectedNodeId(null)
-    setSelectedEdgeId(null)
-  }, [])
+  }, [nodes.length, pushHistory])
 
   const onUpdateNode = useCallback(
     (id: string, patch: Partial<StateNode['data']>) => {
+      pushHistory()
       setNodes((nds) => {
-        let updated = nds.map((n) => {
-          if (n.id !== id) return n
-          return { ...n, data: { ...n.data, ...patch } }
-        })
-        // Enforce single start state
+        let updated = nds.map((n) =>
+          n.id !== id ? n : { ...n, data: { ...n.data, ...patch } }
+        )
         if (patch.isStart === true) {
           updated = updated.map((n) =>
             n.id !== id ? { ...n, data: { ...n.data, isStart: false } } : n
@@ -148,69 +193,114 @@ export default function Home() {
       })
       setSimState(null)
     },
-    []
+    [pushHistory]
   )
 
-  const onUpdateEdge = useCallback((id: string, symbols: string[]) => {
-    setEdges((eds) =>
-      eds.map((e) =>
-        e.id === id ? { ...e, data: { ...(e.data ?? { symbols: [], isActive: false }), symbols } } : e
+  const onUpdateEdge = useCallback(
+    (id: string, symbols: string[]) => {
+      pushHistory()
+      setEdges((eds) =>
+        eds.map((e) =>
+          e.id === id
+            ? { ...e, data: { ...(e.data ?? { symbols: [], isActive: false }), symbols } }
+            : e
+        )
       )
-    )
-    setSimState(null)
-  }, [])
+      setSimState(null)
+    },
+    [pushHistory]
+  )
 
-  const onDeleteNode = useCallback((id: string) => {
-    setNodes((nds) => nds.filter((n) => n.id !== id))
-    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
-    setSelectedNodeId(null)
-    setSimState(null)
-  }, [])
+  const onDeleteNode = useCallback(
+    (id: string) => {
+      pushHistory()
+      setNodes((nds) => nds.filter((n) => n.id !== id))
+      setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id))
+      setSelectedNodeId(null)
+      setSimState(null)
+    },
+    [pushHistory]
+  )
 
-  const onDeleteEdge = useCallback((id: string) => {
-    setEdges((eds) => eds.filter((e) => e.id !== id))
-    setSelectedEdgeId(null)
-    setSimState(null)
-  }, [])
+  const onDeleteEdge = useCallback(
+    (id: string) => {
+      pushHistory()
+      setEdges((eds) => eds.filter((e) => e.id !== id))
+      setSelectedEdgeId(null)
+      setSimState(null)
+    },
+    [pushHistory]
+  )
 
-  const onAddSelfLoop = useCallback((nodeId: string) => {
-    const id = `e-${nodeId}-${nodeId}-${Date.now()}`
-    const newEdge: TransitionEdge = {
-      id,
-      source: nodeId,
-      target: nodeId,
-      type: 'transition',
-      data: { symbols: ['a'], isActive: false },
-    }
-    setEdges((eds) => [...eds, newEdge])
-    setSelectedEdgeId(id)
-    setSelectedNodeId(null)
-    setSimState(null)
-  }, [])
+  const onAddSelfLoop = useCallback(
+    (nodeId: string) => {
+      pushHistory()
+      const id = `e-${nodeId}-${nodeId}-${Date.now()}`
+      const newEdge: TransitionEdge = {
+        id,
+        source: nodeId,
+        target: nodeId,
+        type: 'transition',
+        data: { symbols: ['a'], isActive: false },
+      }
+      setEdges((eds) => [...eds, newEdge])
+      setSelectedEdgeId(id)
+      setSelectedNodeId(null)
+      setSimState(null)
+    },
+    [pushHistory]
+  )
 
-  const onLoadExample = useCallback((example: ExampleAutomaton) => {
-    nodeCounter = example.nodes.length
-    setNodes(example.nodes.map((n) => ({ ...n, data: { ...n.data, isActive: false } })))
-    setEdges(example.edges.map((e) => ({ ...e, data: { ...(e.data ?? { symbols: [], isActive: false }), isActive: false } })))
-    setSelectedNodeId(null)
-    setSelectedEdgeId(null)
-    setSimState(null)
-  }, [])
+  const onLoadExample = useCallback(
+    (example: ExampleAutomaton) => {
+      pushHistory()
+      nodeCounter = example.nodes.length
+      setNodes(example.nodes.map((n) => ({ ...n, data: { ...n.data, isActive: false } })))
+      setEdges(
+        example.edges.map((e) => ({
+          ...e,
+          data: { ...(e.data ?? { symbols: [], isActive: false }), isActive: false },
+        }))
+      )
+      setSelectedNodeId(null)
+      setSelectedEdgeId(null)
+      setSimState(null)
+    },
+    [pushHistory]
+  )
 
   const onNewAutomaton = useCallback(() => {
+    pushHistory()
     nodeCounter = 0
     setNodes([])
     setEdges([])
     setSelectedNodeId(null)
     setSelectedEdgeId(null)
     setSimState(null)
+  }, [pushHistory])
+
+  // Selection handlers (no history needed)
+  const onNodeClick = useCallback((id: string) => {
+    setSelectedNodeId(id)
+    setSelectedEdgeId(null)
+  }, [])
+  const onEdgeClick = useCallback((id: string) => {
+    setSelectedEdgeId(id)
+    setSelectedNodeId(null)
+  }, [])
+  const onPaneClick = useCallback(() => {
+    setSelectedNodeId(null)
+    setSelectedEdgeId(null)
   }, [])
 
-  // Load first example on mount
+  // Load first example on mount (no history entry — nothing to undo to)
   useEffect(() => {
     onLoadExample(EXAMPLES[0])
+    historyRef.current = []
+    setHistoryLength(0)
   }, [])
 
+  // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-screen bg-slate-100">
       <TopBar onLoadExample={onLoadExample} onNewAutomaton={onNewAutomaton} />
@@ -225,7 +315,15 @@ export default function Home() {
             >
               + Add State
             </button>
-            <span className="text-xs text-slate-400">
+            <button
+              onClick={undo}
+              disabled={historyLength === 0}
+              title="Undo (Ctrl-Z)"
+              className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 text-slate-600 hover:bg-slate-50 disabled:opacity-35 disabled:cursor-not-allowed transition-colors"
+            >
+              ↩ Undo
+            </button>
+            <span className="text-xs text-slate-400 ml-1">
               Drag from a state's border to connect transitions. Click to select.
             </span>
           </div>
@@ -243,7 +341,6 @@ export default function Home() {
 
         {/* Right panel */}
         <aside className="w-72 flex flex-col bg-white border-l border-slate-200 overflow-y-auto shrink-0">
-          {/* Inspector section */}
           <div className="flex-none">
             <InspectorPanel
               selectedNode={selectedNode}
@@ -256,18 +353,17 @@ export default function Home() {
             />
           </div>
 
-          {/* Example info strip */}
           {!selectedNode && !selectedEdge && (
             <div className="px-4 pb-3 text-xs text-slate-400">
               <div className="border-t border-slate-100 pt-3">
                 <p className="font-semibold text-slate-500 mb-1">Keyboard shortcuts</p>
-                <p>Delete key — remove selected item</p>
+                <p>Ctrl-Z — undo</p>
+                <p>Delete — remove selected item</p>
                 <p>Drag state border — draw transition</p>
               </div>
             </div>
           )}
 
-          {/* Simulator */}
           <SimulatorPanel
             automaton={automaton}
             simState={simState}
