@@ -14,6 +14,8 @@ import InspectorPanel from '@/components/Inspector/InspectorPanel'
 import SimulatorPanel from '@/components/Simulator/SimulatorPanel'
 import TopBar from '@/components/TopBar'
 import Toast from '@/components/Toast'
+import RegexParsePanel from '@/components/Regex/RegexParsePanel'
+import ExplainPanel from '@/components/Explain/ExplainPanel'
 
 import type {
   StateNode,
@@ -23,6 +25,9 @@ import type {
 import { deriveAutomaton } from '@/lib/simulation'
 import type { DiagramId, DiagramMeta, DiagramDocument } from '@/types/diagrams'
 import { isExampleDiagramId } from '@/lib/diagramIds'
+import { describeRegexEnglish, formatRegexAstTree, parseRegex } from '@/lib/regex'
+import type { RegexAst } from '@/types/regex'
+import { explainDfa, type ExplainMode } from '@/lib/explainDfa'
 
 let nodeCounter = 0
 function nextNodeId() {
@@ -47,6 +52,15 @@ export default function Home() {
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null)
   const [simState, setSimState] = useState<SimulationState | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
+
+  // ── Regex parsing (first-pass: parse + explain + tree) ─────────────────────
+  const [regexInput, setRegexInput] = useState<string | null>(null)
+  const [regexAst, setRegexAst] = useState<RegexAst | null>(null)
+  const [regexEnglish, setRegexEnglish] = useState<string | null>(null)
+  const [regexTree, setRegexTree] = useState<string | null>(null)
+  const [regexError, setRegexError] = useState<{ message: string; index: number } | null>(null)
+
+  const [explainMode, setExplainMode] = useState<ExplainMode>('off')
 
   // ── Diagram persistence (filesystem via API routes) ────────────────────────
   const [diagrams, setDiagrams] = useState<DiagramMeta[]>([])
@@ -198,6 +212,7 @@ export default function Home() {
 
   // ── Derived state ──────────────────────────────────────────────────────────
   const automaton = useMemo(() => deriveAutomaton(nodes, edges), [nodes, edges])
+  const explanation = useMemo(() => explainDfa(automaton, explainMode), [automaton, explainMode])
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -448,6 +463,27 @@ export default function Home() {
     }
   }, [applyLoadedDiagram, diagramId, refreshDiagramList])
 
+  const onRegex = useCallback(() => {
+    const initial = regexInput ?? '(a|b)*abb'
+    const next = window.prompt('Enter a regular expression:', initial)
+    if (next === null) return
+
+    setRegexInput(next)
+    const parsed = parseRegex(next)
+    if (!parsed.ok) {
+      setRegexAst(null)
+      setRegexEnglish(null)
+      setRegexTree(null)
+      setRegexError(parsed.error)
+      return
+    }
+
+    setRegexError(null)
+    setRegexAst(parsed.ast)
+    setRegexEnglish(describeRegexEnglish(parsed.ast))
+    setRegexTree(formatRegexAstTree(parsed.ast))
+  }, [regexInput])
+
   const onNewAutomaton = useCallback(() => {
     pushHistory()
     nodeCounter = 0
@@ -513,6 +549,9 @@ export default function Home() {
         onRenameDiagram={onRenameDiagram}
         onResetExample={onResetExample}
         onDeleteDiagram={onDeleteDiagram}
+        onRegex={onRegex}
+        explainMode={explainMode}
+        onExplainModeChange={setExplainMode}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -570,6 +609,9 @@ export default function Home() {
               onAddSelfLoop={onAddSelfLoop}
             />
           </div>
+
+          <RegexParsePanel input={regexInput} english={regexEnglish} tree={regexTree} error={regexError} />
+          {explanation && <ExplainPanel title={explanation.title} text={explanation.text} />}
 
           {!selectedNode && !selectedEdge && (
             <div className="px-4 pb-3 text-xs text-slate-400">

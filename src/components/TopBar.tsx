@@ -14,6 +14,9 @@ interface TopBarProps {
   onRenameDiagram: () => void
   onResetExample: () => void
   onDeleteDiagram: () => void
+  onRegex: () => void
+  explainMode: 'off' | 'optionA' | 'optionB'
+  onExplainModeChange: (mode: 'off' | 'optionA' | 'optionB') => void
 }
 
 export default function TopBar({
@@ -25,6 +28,9 @@ export default function TopBar({
   onRenameDiagram,
   onResetExample,
   onDeleteDiagram,
+  onRegex,
+  explainMode,
+  onExplainModeChange,
 }: TopBarProps) {
   const isExample = selectedDiagramId ? isExampleDiagramId(selectedDiagramId) : false
   const handleNew = () => {
@@ -136,6 +142,29 @@ export default function TopBar({
             </button>
           </>
         ) : null}
+      </div>
+
+      <button
+        onClick={onRegex}
+        className="ml-auto text-sm border border-slate-300 rounded-lg px-3 py-1.5 text-slate-700 hover:bg-slate-50 transition-colors"
+        title="Parse a regular expression"
+      >
+        Regex…
+      </button>
+
+      <div className="flex items-center gap-2">
+        <label className="text-xs font-medium text-slate-500 whitespace-nowrap hidden sm:block">
+          Explain:
+        </label>
+        <select
+          className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          value={explainMode}
+          onChange={(e) => onExplainModeChange(e.target.value as any)}
+        >
+          <option value="off">Off</option>
+          <option value="optionA">Option A</option>
+          <option value="optionB">Option B</option>
+        </select>
       </div>
 
       {!isExample && (
