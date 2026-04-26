@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { EXAMPLES } from '@/data/examples'
 import type { ExampleAutomaton } from '@/types/automaton'
 
@@ -9,6 +10,13 @@ interface TopBarProps {
 }
 
 export default function TopBar({ onLoadExample, onNewAutomaton }: TopBarProps) {
+  const [selectedIdx, setSelectedIdx] = useState('0')
+
+  const handleNew = () => {
+    setSelectedIdx('')
+    onNewAutomaton()
+  }
+
   return (
     <header className="h-14 bg-white border-b border-slate-200 flex items-center px-4 gap-4 shrink-0 shadow-sm">
       <div className="flex items-center gap-2 mr-2">
@@ -25,24 +33,25 @@ export default function TopBar({ onLoadExample, onNewAutomaton }: TopBarProps) {
 
       <div className="flex items-center gap-2">
         <label className="text-xs font-medium text-slate-500 whitespace-nowrap hidden sm:block">
-          Load example:
+          Example:
         </label>
         <select
-          className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 max-w-[220px]"
-          defaultValue=""
+          className="text-sm border border-slate-300 rounded-lg px-3 py-1.5 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-400 max-w-[240px]"
+          value={selectedIdx}
           onChange={(e) => {
-            const idx = Number(e.target.value)
-            if (!isNaN(idx) && EXAMPLES[idx]) {
-              onLoadExample(EXAMPLES[idx])
+            const idx = e.target.value
+            setSelectedIdx(idx)
+            const num = Number(idx)
+            if (idx !== '' && EXAMPLES[num]) {
+              onLoadExample(EXAMPLES[num])
             }
-            e.target.value = ''
           }}
         >
           <option value="" disabled>
             Choose an example…
           </option>
           {EXAMPLES.map((ex, i) => (
-            <option key={i} value={i}>
+            <option key={i} value={String(i)}>
               {ex.type}: {ex.name}
             </option>
           ))}
@@ -50,7 +59,7 @@ export default function TopBar({ onLoadExample, onNewAutomaton }: TopBarProps) {
       </div>
 
       <button
-        onClick={onNewAutomaton}
+        onClick={handleNew}
         className="ml-auto text-sm border border-slate-300 rounded-lg px-3 py-1.5 text-slate-600 hover:bg-slate-50 transition-colors"
       >
         + New
