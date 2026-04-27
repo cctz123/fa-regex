@@ -14,7 +14,7 @@ import InspectorPanel from '@/components/Inspector/InspectorPanel'
 import SimulatorPanel from '@/components/Simulator/SimulatorPanel'
 import TopBar from '@/components/TopBar'
 import Toast from '@/components/Toast'
-import RegexParsePanel from '@/components/Regex/RegexParsePanel'
+import RegexDialog from '@/components/Regex/RegexDialog'
 import ExplainPanel from '@/components/Explain/ExplainPanel'
 
 import type {
@@ -25,9 +25,11 @@ import type {
 import { deriveAutomaton } from '@/lib/simulation'
 import type { DiagramId, DiagramMeta, DiagramDocument } from '@/types/diagrams'
 import { isExampleDiagramId } from '@/lib/diagramIds'
-import { describeRegexEnglish, formatRegexAstTree, parseRegex } from '@/lib/regex'
-import type { RegexAst } from '@/types/regex'
 import { explainDfa, type ExplainMode } from '@/lib/explainDfa'
+import { regexAstToNfaDiagram } from '@/lib/regexToNfa'
+import type { RegexAst } from '@/types/regex'
+import { isDeterministicDfa } from '@/lib/automatonUtils'
+import { nfaToDfaDiagram } from '@/lib/nfaToDfa'
 
 let nodeCounter = 0
 function nextNodeId() {
@@ -53,12 +55,9 @@ export default function Home() {
   const [simState, setSimState] = useState<SimulationState | null>(null)
   const [toastMessage, setToastMessage] = useState<string | null>(null)
 
-  // ── Regex parsing (first-pass: parse + explain + tree) ─────────────────────
-  const [regexInput, setRegexInput] = useState<string | null>(null)
-  const [regexAst, setRegexAst] = useState<RegexAst | null>(null)
-  const [regexEnglish, setRegexEnglish] = useState<string | null>(null)
-  const [regexTree, setRegexTree] = useState<string | null>(null)
-  const [regexError, setRegexError] = useState<{ message: string; index: number } | null>(null)
+  // ── Regex dialog (first-pass: parse + explain + tree) ──────────────────────
+  const [regexDialogOpen, setRegexDialogOpen] = useState(false)
+  const [lastRegexDraft, setLastRegexDraft] = useState('(a|b)*abb')
 
   const [explainMode, setExplainMode] = useState<ExplainMode>('off')
 
@@ -123,6 +122,30 @@ export default function Home() {
       localStorage.setItem('fa.lastDiagramId', doc.id)
     },
     [applyLoadedDiagram]
+  )
+
+  const createDiagramWithContent = useCallback(
+    async (description: string, nodes: StateNode[], edges: TransitionEdge[]) => {
+      const res = await fetch('/api/diagrams', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ description }),
+      })
+      if (!res.ok) throw new Error('Failed to create diagram')
+      const created = (await res.json()) as DiagramDocument
+
+      const put = await fetch(`/api/diagrams/${encodeURIComponent(created.id)}`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nodes, edges }),
+      })
+      if (!put.ok) throw new Error('Failed to populate diagram')
+
+      await refreshDiagramList()
+      await loadDiagram(created.id)
+      setToastMessage('Created NFA diagram from regex.')
+    },
+    [loadDiagram, refreshDiagramList]
   )
 
   const createDiagram = useCallback(async (description?: string) => {
@@ -213,6 +236,7 @@ export default function Home() {
   // ── Derived state ──────────────────────────────────────────────────────────
   const automaton = useMemo(() => deriveAutomaton(nodes, edges), [nodes, edges])
   const explanation = useMemo(() => explainDfa(automaton, explainMode), [automaton, explainMode])
+  const showConvertToDfa = useMemo(() => !isDeterministicDfa(automaton), [automaton])
 
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedNodeId) ?? null,
@@ -464,25 +488,8 @@ export default function Home() {
   }, [applyLoadedDiagram, diagramId, refreshDiagramList])
 
   const onRegex = useCallback(() => {
-    const initial = regexInput ?? '(a|b)*abb'
-    const next = window.prompt('Enter a regular expression:', initial)
-    if (next === null) return
-
-    setRegexInput(next)
-    const parsed = parseRegex(next)
-    if (!parsed.ok) {
-      setRegexAst(null)
-      setRegexEnglish(null)
-      setRegexTree(null)
-      setRegexError(parsed.error)
-      return
-    }
-
-    setRegexError(null)
-    setRegexAst(parsed.ast)
-    setRegexEnglish(describeRegexEnglish(parsed.ast))
-    setRegexTree(formatRegexAstTree(parsed.ast))
-  }, [regexInput])
+    setRegexDialogOpen(true)
+  }, [])
 
   const onNewAutomaton = useCallback(() => {
     pushHistory()
@@ -493,6 +500,17 @@ export default function Home() {
     setSelectedEdgeId(null)
     setSimState(null)
   }, [pushHistory])
+
+  const onConvertToDfa = useCallback(async () => {
+    try {
+      const { nodes: dfaNodes, edges: dfaEdges } = nfaToDfaDiagram(automaton)
+      const base = diagramDescription || 'Diagram'
+      await createDiagramWithContent(`DFA: ${base}`, dfaNodes, dfaEdges)
+    } catch (e) {
+      console.error(e)
+      setToastMessage('Failed to convert to DFA.')
+    }
+  }, [automaton, createDiagramWithContent, diagramDescription])
 
   // Selection handlers (no history needed)
   const onNodeClick = useCallback((id: string) => {
@@ -552,6 +570,19 @@ export default function Home() {
         onRegex={onRegex}
         explainMode={explainMode}
         onExplainModeChange={setExplainMode}
+        showConvertToDfa={showConvertToDfa}
+        onConvertToDfa={onConvertToDfa}
+      />
+
+      <RegexDialog
+        open={regexDialogOpen}
+        initialValue={lastRegexDraft}
+        onClose={() => setRegexDialogOpen(false)}
+        onDraftChange={setLastRegexDraft}
+        onValidRegex={async (input: string, ast: RegexAst) => {
+          const { nodes, edges } = regexAstToNfaDiagram(ast)
+          await createDiagramWithContent(`R-NFA: ${input}`, nodes, edges)
+        }}
       />
 
       <div className="flex flex-1 min-h-0">
@@ -610,7 +641,6 @@ export default function Home() {
             />
           </div>
 
-          <RegexParsePanel input={regexInput} english={regexEnglish} tree={regexTree} error={regexError} />
           {explanation && (
             <ExplainPanel title={explanation.title} text={explanation.text} details={explanation.details} />
           )}

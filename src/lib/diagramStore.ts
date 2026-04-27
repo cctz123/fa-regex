@@ -9,7 +9,10 @@ const SCHEMA_VERSION = 1 as const
 const SEEDED_FLAG_PATH = '.seeded-examples'
 
 function diagramsDir(): string {
-  return path.join(process.cwd(), 'data', 'diagrams')
+  // In Fly.io we mount a persistent volume and point DIAGRAMS_DIR at it.
+  return process.env.DIAGRAMS_DIR
+    ? path.resolve(process.env.DIAGRAMS_DIR)
+    : path.join(process.cwd(), 'data', 'diagrams')
 }
 
 function indexPath(): string {
